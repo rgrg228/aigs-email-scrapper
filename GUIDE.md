@@ -81,4 +81,118 @@ That's it. Eight steps. The rest of this book explains every box.
 
 ---
 
-Next: **Chapter 2 — What is Google Apps Script.**
+# Chapter 2 — What is Google Apps Script
+
+## What & why
+
+**Google Apps Script is a programming environment that lives inside your Google
+account.** You write small bits of JavaScript code, and they run on Google's
+servers with built-in permission to read your Gmail, edit your Sheets, send
+Drive files, post to Calendar, and so on.
+
+Think of it as **a robot assistant that can use any Google product on your
+behalf.** You give it instructions ("every hour, check Gmail for new lead
+emails and write them into this spreadsheet"), and it does the work.
+
+You don't need:
+- A server (Google hosts it for free)
+- A login system (it already knows you're you, because it lives in your account)
+- A database (use a Sheet)
+- A frontend host (Apps Script can serve HTML directly)
+
+You do need:
+- A free Google account
+- A web browser
+- Some patience for the first hour
+
+## How it works
+
+An Apps Script **project** is a folder of files. There are three file types
+that matter:
+
+| File type | What it does |
+|---|---|
+| `.gs` (Google Script) | JavaScript code that runs on Google's servers |
+| `.html` | The frontend, if you build a web app |
+| `appsscript.json` | The "manifest" — declares what Google permissions your code needs |
+
+Inside the `.gs` files you define **functions**. Each function is a named
+chunk of code you can run. Some functions you trigger manually (clicking
+"Run" in the editor). Others run automatically — on a **trigger** (every
+hour, when a form is submitted, when a sheet is edited).
+
+Apps Script gives you free access to Google's products through built-in
+**services**. The names are predictable:
+
+| Service | What you do with it |
+|---|---|
+| `GmailApp` | Search, read, label, send emails |
+| `SpreadsheetApp` | Create sheets, read cells, write rows |
+| `DriveApp` | Manage files in Drive |
+| `UrlFetchApp` | Make HTTP requests to any external API |
+| `HtmlService` | Serve HTML pages (build a web UI) |
+| `PropertiesService` | Store small bits of config |
+| `ScriptApp` | Manage triggers (schedules) |
+
+You'll see most of these in our project.
+
+## Why we picked it for this project
+
+We had four real options. Here's why Apps Script won:
+
+| Option | Pro | Con |
+|---|---|---|
+| **Apps Script** ✅ | Free, native Gmail + Sheets, hosted by Google | Browser-based editor is clunky |
+| Zapier / Make | No-code, fast to set up | Costs money per task at volume; harder to customise parsing logic |
+| n8n self-hosted | Free, powerful, visual | You have to host and maintain a server |
+| Node.js + Vercel | Maximum flexibility | OAuth setup is painful; overkill for <10 leads/day |
+
+For this project — **low volume (<10/day), Gmail-as-source, Sheets-as-CRM,
+single Uchat destination** — Apps Script is the lightest possible answer.
+Zero infra, zero cost, zero auth headache.
+
+When would Apps Script be the wrong choice? Mostly when:
+- Volume is huge (thousands of triggers per minute)
+- You need a real database with relationships
+- Multiple developers need to collaborate with version control as the source
+  of truth (Apps Script's git story is awkward)
+
+## Try it yourself
+
+A 60-second exercise to feel how it works:
+
+1. Go to **https://script.google.com**
+2. Click **+ New project**
+3. Replace the placeholder code with:
+
+   ```javascript
+   function helloMe() {
+     const email = Session.getActiveUser().getEmail();
+     Logger.log('Hello ' + email);
+   }
+   ```
+
+4. Click **Save**, then **Run** (it'll ask for permissions — allow them)
+5. Look at the bottom of the editor — the **execution log** prints
+   `Hello your.name@gmail.com`
+
+That's it. You just ran code on Google's servers that knew who you were
+without you typing a password. That's the magic.
+
+## In our project
+
+We use:
+- **`GmailApp`** to search the inbox for Chat2Sales emails
+- **`SpreadsheetApp`** to write each lead into the "Loan Leads CRM" sheet
+- **`UrlFetchApp`** to POST to Uchat
+- **`HtmlService`** to serve the dashboard
+- **`PropertiesService`** to remember the sheet's ID across runs
+- **`ScriptApp`** to set up the hourly auto-scrape trigger
+
+Six of the seven services in one small project. That's why Apps Script is
+such a natural fit.
+
+---
+
+Next: **Chapter 3 — The Apps Script editor: your first project.**
+
