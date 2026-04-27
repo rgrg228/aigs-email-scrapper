@@ -1144,6 +1144,371 @@ wrong.
 
 ---
 
+# Chapter 11 — Daily operation
+
+## What a normal day looks like
+
+Once everything is set up, your daily loop should be **less than two minutes**:
+
+1. **Morning** — open the dashboard URL bookmark
+2. Glance at the leads table — any new ones from overnight will already be
+   there (the hourly trigger ran while you slept)
+3. Click **Send all pending → Uchat**
+4. Done
+
+That's it. The hourly trigger does the scraping; you do the sending.
+
+## What gets logged where
+
+| What | Where | When |
+|---|---|---|
+| Lead arrived | Sheet, new row, status `pending` | Within 1 hour of the email |
+| WhatsApp sent | Sheet, status flips to `sent`, `WA Sent At` filled | Right after you click Send |
+| Send failed | Sheet, status `error 4xx`, `Notes` has the response | Right after the failure |
+| Email already processed | Gmail label `scrapped` on the thread | After scrape |
+| Code execution failure | Apps Script → Executions panel | When it happened |
+
+## Reading the sheet
+
+Three columns to watch:
+
+- **WA Status** — `pending`, `sent`, or `error <code>`
+- **WA Sent At** — empty until sent, then a timestamp
+- **Notes** — error responses from Uchat (only filled when something fails)
+
+If a row says `error 4xx`, click the cell, read the Notes, fix the issue
+(usually a bad phone number or an inactive webhook), then **manually edit
+the WA Status back to `pending`** and click Send all pending again.
+
+## Pausing the system
+
+Going on holiday and don't want WhatsApps blasting?
+
+- **Disable the trigger**: Apps Script → ⏰ Triggers → click the row → trash
+  icon. New leads will pile up in Gmail labelled `scrapped`-less, and the
+  next time you run `scrapeInbox` they'll all flow in.
+
+- Or just **don't open the dashboard** — the auto-scrape doesn't auto-send.
+  Leads will pile up at status `pending` and you can send them all when you
+  return.
+
+## Resending a message to a single lead
+
+The lead said "didn't get it"? Or the first send had a typo?
+
+1. Open the sheet
+2. Find their row
+3. Edit **WA Status** back to `pending` (just type it)
+4. Open the dashboard → click **Send WA** on that row
+
+Uchat will treat it as a fresh trigger and the flow will run again.
+
+## Updating the deployed dashboard
+
+When you (or I) change `Code.gs` or `Index.html`, the deployed web app
+**doesn't auto-update**. You have to redeploy:
+
+1. **Deploy → Manage deployments**
+2. Click the ✏ pencil icon next to the active deployment
+3. Version dropdown → **New version**
+4. **Deploy**
+
+Same URL, new code. Refresh the dashboard tab.
+
+---
+
+# Chapter 12 — Customising for a new form
+
+The whole point of this build is that you can re-use it. Here's the recipe
+for adapting it to a new lead source (different form, different email
+format, different fields).
+
+## Scenario: a new product
+
+Suppose you launch a second product and the form notification email looks
+like this:
+
+```
+Subject: New consult booking — Jane Smith
+
+Hi team, you've got a new booking:
+
+Full Name: Jane Smith
+Mobile: +60 12-3456789
+Email: jane@example.com
+Service: Annual Health Check
+Preferred Date: 2026-05-10
+
+Sent from MyClinic.com
+```
+
+Your tasks:
+
+### 1. Update `CONFIG.GMAIL_QUERY`
+
+```javascript
+GMAIL_QUERY: 'from:noreply@myclinic.com subject:"New consult booking"',
+```
+
+Test in Gmail's search bar first.
+
+### 2. Update `CONFIG.FIELDS`
+
+The new form's labels are different. Map each one:
+
+```javascript
+FIELDS: {
+  'Name':           /Full Name\s*[:\-]\s*(.+)/i,
+  'Phone':          /Mobile\s*[:\-]\s*([+\d\s\-()]+)/i,
+  'Email':          /Email\s*[:\-]\s*([^\s<>]+@[^\s<>]+)/i,
+  'Service':        /Service\s*[:\-]\s*(.+)/i,
+  'Preferred Date': /Preferred Date\s*[:\-]\s*([\d\-\/]+)/i,
+},
+```
+
+### 3. Reset the sheet
+
+Headers come from `CONFIG.FIELDS`, so if you've changed the keys you need
+fresh headers:
+
+1. Open the sheet
+2. Delete row 1 (the headers)
+3. Run `setup` again — it'll write new headers
+
+If you've already got data in the sheet from the old form, **copy it to a
+new tab first** so you don't lose it.
+
+### 4. Create a new Uchat inbound webhook
+
+Each form/product = one webhook. Don't reuse the old one.
+
+1. Tools → Inbound Webhooks → + New
+2. Name: `Consult Booking Trigger`
+3. Paste a sample JSON like:
+   ```json
+   {
+     "phone": "60123456789",
+     "name": "Jane Smith",
+     "email": "jane@example.com",
+     "service": "Annual Health Check",
+     "preferred_date": "2026-05-10"
+   }
+   ```
+4. Map: `$.phone` for identification, custom fields for everything else
+5. Connect to a new flow with the appropriate template
+6. Activate
+
+### 5. Update `CONFIG.UCHAT_TRIGGER_URL`
+
+Paste the new webhook URL.
+
+### 6. Test with one row
+
+Manually submit the form, wait an hour (or click Scrape), click Send WA.
+Watch the WhatsApp arrive.
+
+## What if you have **two** different lead sources at once?
+
+Two options:
+
+**Option A — Two separate Apps Script projects.** Cleanest. Copy the whole
+project, change the CONFIG, deploy a separate dashboard. Each has its own
+hourly trigger. Recommended.
+
+**Option B — One project, multiple configs.** More advanced; you'd refactor
+`CONFIG` into an array and run `scrapeInbox` once per config. Skip until
+you have 3+ sources and the duplication actually hurts.
+
+## What if the email format changes?
+
+Forms change their notification template once in a while. Symptoms:
+
+- Sheet stops getting new rows even though emails are arriving
+- Or rows arrive but Name/Phone are blank
+
+Fix:
+
+1. Open one of the recent emails in Gmail
+2. Compare the labels in the body to your `CONFIG.FIELDS` regex
+3. Update the regex
+4. Re-test with `scrapeInbox`
+
+The original loose patterns I wrote (`(?:Phone|Mobile|WhatsApp)`) handle
+most variations, but very different formats will need new regex.
+
+---
+
+# Chapter 13 — Troubleshooting
+
+A flat catalogue of failures we've seen, what causes them, and how to fix.
+Skim it now; come back when something breaks.
+
+## Apps Script side
+
+### "Function dropdown only shows `myFunction`"
+
+You pasted my code **inside** the default `function myFunction() { ... }`
+wrapper. Delete the wrapper (line 1 and the closing `}` at the bottom) so
+my functions are top-level.
+
+### "Run setup first" thrown error
+
+You haven't run `setup()` yet, so `SHEET_ID` isn't saved. Run it once.
+
+### "Unauthorized" or "OAuth permission required"
+
+You skipped or cancelled the permission dialog. Run the function again,
+click through *Advanced → Go to (unsafe) → Allow*.
+
+### Sheet doesn't appear in Drive after running setup
+
+- Wrong Google account? Apps Script may have run as a different login than
+  the Drive tab you're checking.
+- Did setup actually run? Check the **Executions** panel. If empty, you
+  never clicked Run.
+
+### Scrape adds 0 rows even though emails are in the inbox
+
+- Run your `GMAIL_QUERY` directly in Gmail's search bar. If it returns
+  nothing, fix the query.
+- Are the emails labelled `scrapped` already? They'll be excluded.
+- Did one of your fields fail to parse? `hasMinimum_()` requires Name +
+  Phone. If either regex misses, the row is skipped silently.
+
+### Phone numbers come out wrong (`919...` instead of `60...`)
+
+`DEFAULT_COUNTRY_CODE` in `CONFIG` is wrong. Change it. The fix applies to
+**future** scrapes only — existing rows in the sheet won't auto-update.
+
+### Hourly trigger doesn't seem to run
+
+- Triggers panel: is there a row for `scrapeInbox` time-based? If no,
+  `installHourlyTrigger` never ran.
+- Triggers panel: any "Failure" indications? Click the row to see the
+  recent execution history.
+- Triggers run on Google's clock, not yours. Could be 10-15 min late.
+
+## Uchat side
+
+### Test POST returns "webhook inactive"
+
+You haven't toggled the webhook to **Active** yet. It's the on/off switch
+at the top of the webhook editor.
+
+### Test POST returns "phone is invalid"
+
+The phone in the payload isn't in E.164. Check `normalizePhone_()` worked —
+the value in the sheet's Phone column should be all digits, no `+` or
+spaces, starting with the country code.
+
+### Test POST succeeds but WhatsApp never arrives
+
+Walk down the ladder:
+
+1. Uchat webhook **Logs** — does the request appear?
+2. Uchat **bot users** — was a user created with that phone?
+3. The user's **history** — did the flow run?
+4. The flow's **template node** — did it send?
+
+If all show success but no WhatsApp, the issue is on the WhatsApp side
+(template not approved, or the user's number isn't reachable, or Meta
+blocked it for spam reasons).
+
+### "Channel not specified" or similar
+
+In the webhook editor's identification section, the **channel** dropdown
+isn't filled. Set it to your WhatsApp channel.
+
+### Template variables come through blank or as literal `{{1}}`
+
+Uchat couldn't find the custom field for that placeholder. Either:
+- The custom field name in the mapping doesn't match what the template
+  references
+- The mapping in the webhook didn't save
+- The custom field was created but on a different channel
+
+Open the bot user's profile in Uchat — you should see all custom fields
+filled. If they're empty, the webhook mapping is broken.
+
+## Misc
+
+### "I deleted the sheet by accident"
+
+The script properties still have `SHEET_ID` pointing at a dead file. Apps
+Script editor → Project Settings → Script Properties → delete `SHEET_ID`.
+Run `setup` again. New sheet, fresh start.
+
+### "I want to start completely over"
+
+1. Delete the sheet from Drive
+2. Apps Script → Project Settings → Script Properties → delete `SHEET_ID`
+3. Gmail → remove the `scrapped` label from any threads (or just delete the
+   label entirely, it'll get recreated)
+4. Run `setup` again
+5. Run `scrapeInbox` — everything that ever matched will reappear in the
+   fresh sheet
+
+---
+
+# Chapter 14 — Glossary
+
+A quick reference for the jargon used in this guide.
+
+| Term | Definition |
+|---|---|
+| **Apps Script** | Google's JavaScript runtime hosted inside your Google account. Lets you script Gmail, Sheets, Drive, etc. |
+| **Bot user / subscriber** | A contact known to Uchat (identified by phone for WhatsApp). |
+| **Channel** | A connection from Uchat to one messaging platform (e.g. one WhatsApp number). |
+| **CONFIG** | The block at the top of `Code.gs` that holds all customisable values. |
+| **Custom field** | A piece of data attached to a bot user. Like a database column. |
+| **Dashboard** | The web UI served by `doGet()` — a bookmark-able URL that shows the leads table. |
+| **Deployment** | A frozen version of your Apps Script web app, accessible by URL. |
+| **doGet()** | The function Apps Script calls when someone visits your web app URL. |
+| **E.164** | The international phone format with country code and no symbols (e.g. `60166482234`). |
+| **Execution log** | The bottom panel of the Apps Script editor that shows `Logger.log` output and errors from your last run. |
+| **Flow** | A visual diagram in Uchat representing what the bot does. |
+| **GmailApp** | The Apps Script service for reading and modifying Gmail. |
+| **HtmlService** | The Apps Script service for serving HTML pages. |
+| **Inbound webhook** | A Uchat URL that accepts JSON and triggers a flow. |
+| **Manifest** | The `appsscript.json` file. Declares what permissions your script needs. |
+| **Message ID** | Gmail's unique ID for a single email. We store it as a dedupe key. |
+| **Outbound webhook / External Request** | A node *inside* a Uchat flow that POSTs to your external system. (We don't use this.) |
+| **PropertiesService** | A simple key-value store for script config. We use it for `SHEET_ID`. |
+| **Regex** | Regular expression — a pattern for matching text. We use them to extract fields from email bodies. |
+| **Scope** | A specific permission your script asks for (e.g. read Gmail, edit Sheets). |
+| **`scrapeInbox()`** | Our function that pulls new lead emails into the sheet. |
+| **`sendToUchat()`** | Our function that POSTs one row to the Uchat webhook. |
+| **Service** | A built-in Apps Script API like GmailApp, SpreadsheetApp, UrlFetchApp. |
+| **`setup()`** | Our one-time function that creates the sheet, label, and headers. |
+| **`SHEET_HEADERS`** | The array of column names. Auto-built from `CONFIG.FIELDS`. |
+| **SpreadsheetApp** | The Apps Script service for reading and writing Google Sheets. |
+| **Template (WhatsApp)** | A Meta-approved message format with placeholders. Required outside the 24-hour window. |
+| **Trigger** | Apps Script's mechanism for running code automatically on a schedule or event. |
+| **UrlFetchApp** | The Apps Script service for making HTTP requests to external APIs. |
+| **`user_ns`** | Uchat's internal subscriber ID. We don't use it directly — we identify by phone. |
+| **Web app** | An Apps Script project deployed as a URL with HTML output. |
+
+---
+
+# Final words
+
+If you've read this far, you know:
+
+- What Apps Script is and why it's the right tool for low-volume Google
+  automation
+- How to read Gmail, write to Sheets, and call external APIs from code
+- How to deploy a private web dashboard for non-technical use
+- How Uchat thinks about channels, bot users, custom fields, and flows
+- How the inbound webhook bridges your code to Uchat
+- How every file in this project fits into the bigger picture
+- How to extend it for a new lead source
+- How to debug it when it breaks
+
+That's enough to be dangerous. Build something with it.
+
+— end of book —
+
+
 
 
 
