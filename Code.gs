@@ -72,7 +72,10 @@ function setup() {
     sheet.setFrozenRows(1);
   }
   ensureLabel_(CONFIG.PROCESSED_LABEL);
-  return { sheetId: sheetId, sheetUrl: ss.getUrl() };
+  const url = ss.getUrl();
+  Logger.log('Sheet ready: ' + url);
+  Logger.log('Sheet ID: ' + sheetId);
+  return { sheetId: sheetId, sheetUrl: url };
 }
 
 function installHourlyTrigger() {
