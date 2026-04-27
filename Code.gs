@@ -127,11 +127,11 @@ function hasMinimum_(parsed) {
 }
 
 function normalizePhone_(raw) {
-  let digits = String(raw).replace(/\D/g, '');
+  let digits = String(raw).replace(/\D/g, '').replace(/^0+/, '');
   if (!digits) return '';
-  // Strip leading zeros (common in local formats).
-  digits = digits.replace(/^0+/, '');
-  if (digits.length === 10) digits = CONFIG.DEFAULT_COUNTRY_CODE + digits;
+  if (!digits.startsWith(CONFIG.DEFAULT_COUNTRY_CODE)) {
+    digits = CONFIG.DEFAULT_COUNTRY_CODE + digits;
+  }
   return digits;
 }
 
