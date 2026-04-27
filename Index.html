@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e8eaf0; --muted:#8a93a6; --accent:#3da9fc; --ok:#3ddc97; --warn:#f6c177; --err:#ef6f6c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  header h1 { margin:0; font-size:16px; font-weight:600; }
+  header .meta { color:var(--muted); font-size:12px; }
+  .bar { padding:12px 20px; border-bottom:1px solid var(--line); display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:var(--panel); }
+  button { background:var(--panel); color:var(--text); border:1px solid var(--line); padding:7px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#06121f; font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #status { color:var(--muted); margin-left:auto; font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:9px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:13px; }
+  th { color:var(--muted); font-weight:500; position:sticky; top:0; background:var(--bg); }
+  tr:hover td { background:#141821; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .pill.pending { background:rgba(246,193,119,.15); color:var(--warn); }
+  .pill.sent    { background:rgba(61,220,151,.15); color:var(--ok); }
+  .pill.error   { background:rgba(239,111,108,.15); color:var(--err); }
+  .empty { padding:60px 20px; text-align:center; color:var(--muted); }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Loan Leads CRM</h1>
+    <span class="meta" id="meta"></span>
+  </header>
+  <div class="bar">
+    <button class="primary" id="btnScrape">Scrape inbox</button>
+    <button id="btnSendAll">Send all pending → Uchat</button>
+    <button id="btnRefresh">Refresh</button>
+    <button id="btnExport">Export Excel</button>
+    <button id="btnSheet">Open Sheet</button>
+    <span id="status">Loading…</span>
+  </div>
+  <div id="tableWrap"></div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  let leads = [];
+
+  function setStatus(s) { $('status').textContent = s; }
+  function lock(b) { document.querySelectorAll('button').forEach(x => x.disabled = b); }
+
+  function pill(s) {
+    const v = String(s || '').toLowerCase();
+    if (v === 'sent') return '<span class="pill sent">sent</span>';
+    if (v.startsWith('error')) return '<span class="pill error">' + v + '</span>';
+    return '<span class="pill pending">pending</span>';
+  }
+
+  function render() {
+    if (!leads.length) {
+      $('tableWrap').innerHTML = '<div class="empty">No leads yet. Click <b>Scrape inbox</b>.</div>';
+      return;
+    }
+    const headers = ['Received At','Name','Phone','Email','Loan Amount','Purpose','WA Status',''];
+    const rows = leads.map(l => `
+      <tr>
+        <td>${fmtDate(l['Received At'])}</td>
+        <td>${esc(l['Name'])}</td>
+        <td>${esc(l['Phone'])}</td>
+        <td>${esc(l['Email'])}</td>
+        <td>${esc(l['Loan Amount'])}</td>
+        <td>${esc(l['Purpose'])}</td>
+        <td>${pill(l['WA Status'])}</td>
+        <td><button data-id="${esc(l['Message ID'])}" class="sendOne">Send WA</button></td>
+      </tr>`).join('');
+    $('tableWrap').innerHTML = `<table><thead><tr>${headers.map(h=>'<th>'+h+'</th>').join('')}</tr></thead><tbody>${rows}</tbody></table>`;
+    document.querySelectorAll('.sendOne').forEach(b => b.addEventListener('click', () => sendOne(b.dataset.id)));
+  }
+
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]); }
+  function fmtDate(s) { if (!s) return ''; const d = new Date(s); return isNaN(d) ? esc(s) : d.toLocaleString(); }
+
+  function loadLeads() {
+    setStatus('Loading leads…');
+    google.script.run
+      .withSuccessHandler(data => { leads = data; render(); setStatus(leads.length + ' leads'); })
+      .withFailureHandler(e => setStatus('Error: ' + e.message))
+      .getLeads();
+  }
+
+  function loadStatus() {
+    google.script.run.withSuccessHandler(s => {
+      $('meta').innerHTML = 'Query: <code>' + esc(s.query) + '</code> · Uchat: ' + (s.uchatConfigured ? 'configured' : '<span style="color:#ef6f6c">not set</span>');
+      $('btnSheet').onclick = () => window.open(s.sheetUrl, '_blank');
+    }).getConfigStatus();
+  }
+
+  function scrape() {
+    lock(true); setStatus('Scraping…');
+    google.script.run
+      .withSuccessHandler(r => { setStatus('Added ' + r.added + ' (scanned ' + r.scanned + ' threads)'); lock(false); loadLeads(); })
+      .withFailureHandler(e => { setStatus('Error: ' + e.message); lock(false); })
+      .scrapeInbox();
+  }
+
+  function sendOne(id) {
+    lock(true); setStatus('Sending to Uchat…');
+    google.script.run
+      .withSuccessHandler(r => { setStatus(r.ok ? 'Sent.' : 'Failed: ' + (r.error || r.body || r.code)); lock(false); loadLeads(); })
+      .withFailureHandler(e => { setStatus('Error: ' + e.message); lock(false); })
+      .sendToUchat(id);
+  }
+
+  function sendAll() {
+    lock(true); setStatus('Sending all pending…');
+    google.script.run
+      .withSuccessHandler(r => { setStatus('Sent ' + r.sent + ', failed ' + (r.failed||0)); lock(false); loadLeads(); })
+      .withFailureHandler(e => { setStatus('Error: ' + e.message); lock(false); })
+      .sendAllPending();
+  }
+
+  function exportXlsx() {
+    google.script.run.withSuccessHandler(url => window.open(url, '_blank')).exportXlsxUrl();
+  }
+
+  $('btnScrape').onclick = scrape;
+  $('btnSendAll').onclick = sendAll;
+  $('btnRefresh').onclick = loadLeads;
+  $('btnExport').onclick = exportXlsx;
+
+  loadStatus();
+  loadLeads();
+</script>
+</body>
+</html>
