@@ -760,5 +760,391 @@ opening the execution log.
 
 ---
 
+# Chapter 8 — What is Uchat
+
+## What & why
+
+**Uchat is a chatbot platform.** It sits between you and the messaging
+channels your customers actually use — WhatsApp, Facebook Messenger,
+Instagram, Telegram, SMS, and so on. You build conversations once, and Uchat
+delivers them across all those channels.
+
+For our project, Uchat is the thing that actually sends WhatsApp messages.
+Apps Script can't talk to WhatsApp directly (Meta requires you to be a
+Business Solution Provider). Uchat **is** a Business Solution Provider, so
+we lean on them.
+
+## The vocabulary
+
+Five terms you'll hear constantly. Learn these first.
+
+| Term | What it is |
+|---|---|
+| **Channel** | A connection to one messaging platform (e.g. one WhatsApp number). One Uchat account can have many channels. |
+| **Bot user** (or **subscriber**) | A person who has interacted with your bot. Identified by phone number on WhatsApp. |
+| **Custom field** | A piece of data attached to a bot user (e.g. `interested_in`, `lead_message`). Like database columns for each contact. |
+| **Flow** | A visual diagram of what the bot does. Triggered by something (a keyword, an inbound webhook, etc.) and runs through nodes one by one. |
+| **Template** | A pre-approved WhatsApp message format. Required because WhatsApp blocks freeform messages to people who haven't messaged you in 24h. |
+
+## How a flow works
+
+Think of a flow like a flowchart:
+
+```
+[Trigger: inbound webhook]
+        │
+        ▼
+[Send WhatsApp Template]   ← uses {{name}}, {{interested_in}}
+        │
+        ▼
+[Wait 1 day]
+        │
+        ▼
+[Send follow-up template]
+```
+
+Each box is a **node**. You drag them in, connect them, and Uchat walks the
+diagram for each new bot user that hits the trigger.
+
+## WhatsApp templates — the rule you can't ignore
+
+WhatsApp business messaging has a strict rule:
+
+> If a user hasn't messaged you in the last 24 hours, you can only send them
+> a **pre-approved template**.
+
+You submit your template text to Meta (via Uchat's UI), they review it
+(usually within hours), and once approved you can send it any time. Templates
+have **placeholders** like `{{1}}`, `{{2}}` that you fill at send time.
+
+Example approved template:
+
+> "Hi {{1}}, thanks for your interest in {{2}}. We'll be in touch shortly."
+
+When sending, you tell Uchat: `{{1}} = name`, `{{2}} = interested_in`. Uchat
+substitutes the values and sends the final message.
+
+If your template ever needs to change, you must submit a new version and
+wait for re-approval. So design carefully the first time.
+
+## Inbound vs outbound webhooks (don't confuse these)
+
+This tripped us up early in the build, so it's worth being explicit:
+
+| Direction | What it is | What it's called in Uchat |
+|---|---|---|
+| **Outbound** (Uchat → outside) | A flow node that calls an external API (e.g. your CRM) | "External Request" |
+| **Inbound** (outside → Uchat) | An endpoint that receives data and starts a flow | "Inbound Webhook" |
+
+We use the **inbound webhook**: Apps Script POSTs to Uchat to push a new lead
+in. Don't get them mixed up.
+
+## In our project
+
+We use:
+- **One channel** — your WhatsApp number
+- **One inbound webhook** — `Demo Lead Trigger`, with the JSON-mapping
+  configuration we set up
+- **Several custom fields** — `lead_name`, `interested_in`, `lead_message`,
+  `received_at`
+- **One flow** — your existing template-sending flow
+- **One template** — the pre-approved WhatsApp message you saved
+
+That's the entire Uchat side. Most projects don't need more.
+
+---
+
+# Chapter 9 — Uchat inbound webhooks (deep dive)
+
+## What & why
+
+The inbound webhook is **the bridge** between your code and Uchat. It's a
+unique URL that accepts a POST request with a JSON body. When data arrives,
+Uchat:
+
+1. Parses the JSON
+2. Finds (or creates) a bot user by the phone number you provided
+3. Saves the rest of the data into custom fields
+4. Triggers a flow
+
+That's the whole loop.
+
+## Anatomy of the setup
+
+When you create an inbound webhook in Uchat, you fill in five things:
+
+### 1. Webhook URL (Uchat gives this to you)
+
+Looks like:
+```
+https://app.chat2sales.ai/api/iwh/7231123b6e7edbf0b3b681fa988b17b0
+```
+
+The long string at the end is the secret. Whoever has this URL can push data
+into your bot, so treat it like a password — don't paste it into Slack or
+GitHub Issues.
+
+### 2. Sample JSON (you provide)
+
+You paste an example of what your data will look like:
+
+```json
+{
+  "phone": "60166482234",
+  "name": "Bill Gates",
+  "email": "billgates@gmail.com",
+  "interested_in": "Affiliate Partner",
+  "message": "I want to make you rich"
+}
+```
+
+This isn't the data Uchat uses at runtime — it's just so the UI can give you
+dropdowns based on field names.
+
+### 3. User identification paths
+
+You tell Uchat **where in the JSON** to find the phone and email.
+
+The `$.` prefix means "root of the JSON object". So `$.phone` means "the
+`phone` key at the top level."
+
+```
+Phone: $.phone
+Email: $.email
+```
+
+Uchat checks user_ns first (skip), then phone, then email. If no match, it
+**creates a new bot user** under the channel you selected.
+
+### 4. Channel (you select)
+
+Which channel new bot users should be created under. Almost always your
+WhatsApp channel.
+
+### 5. Field mapping (you build)
+
+For every other piece of data in your JSON, you decide which **custom field**
+on the bot user it should be saved to:
+
+```
+$.name           →  lead_name
+$.interested_in  →  interested_in
+$.message        →  lead_message
+$.received_at    →  received_at
+```
+
+The custom fields can then be referenced inside any flow as `{{lead_name}}`,
+`{{interested_in}}`, etc.
+
+## The "no auth header" oddity
+
+Most APIs you'll integrate with require an `Authorization: Bearer ...`
+header. Uchat's inbound webhook **doesn't** — the secret is the URL itself.
+
+Pros: simple to call, no token rotation.
+Cons: if the URL leaks, anyone can spam your bot. Don't put it in public
+repos. Our `Code.gs` has it as `''` and you fill it in your private copy.
+
+## Activating the webhook
+
+**This is the step that gets forgotten.** Uchat webhooks come in inactive by
+default. Even after you've configured everything, no flow will run until you
+flip the **Activate** toggle and save.
+
+If your test POSTs return `webhook inactive`, that's the only fix.
+
+## How a flow gets triggered
+
+After the webhook saves the bot user and fields, it triggers the flow you
+chose. The flow's nodes can use any custom field via `{{field_name}}`. So
+your `Send WhatsApp Template` node can reference `{{lead_name}}` directly,
+because the webhook just populated it.
+
+## Logs — your friend when debugging
+
+Every webhook keeps **logs** of every request it received, including the raw
+JSON. If something doesn't fire, check:
+
+1. Did the request reach Uchat? (logs show it = yes)
+2. Did identification succeed? (logs show user found/created = yes)
+3. Did mapping succeed? (logs show fields filled = yes)
+4. Did the flow run? (check the bot user's history in Uchat)
+
+Walk that ladder top to bottom and you'll find the broken rung.
+
+## In our project
+
+`sendToUchat()` in `Code.gs` builds the JSON exactly to match the sample we
+gave Uchat:
+
+```javascript
+const payload = { phone: record['Phone'] };
+Object.keys(CONFIG.FIELDS).forEach(field => {
+  if (field === 'Phone') return;
+  const key = field.toLowerCase().replace(/\s+/g, '_');
+  payload[key] = record[field];
+});
+```
+
+The function dynamically builds keys from `CONFIG.FIELDS`. If you add a new
+field to `CONFIG.FIELDS` (say `'Loan Amount'`), the payload will gain a
+`loan_amount` key automatically. You then have to add `$.loan_amount` to
+the Uchat mapping. Two places to change, but they stay in sync via this
+naming convention.
+
+---
+
+# Chapter 10 — The full project: architecture & file walkthrough
+
+## What we built
+
+Eight files. Three you'll touch, five you won't.
+
+```
+aigs-email-scrapper/
+├── Code.gs            ← all the backend logic (touch this most)
+├── Index.html         ← the dashboard UI
+├── appsscript.json    ← scopes manifest
+├── GUIDE.md           ← this book
+├── .gitignore
+└── .git/              ← (ignore)
+```
+
+## The architecture, end to end
+
+```
+┌──────────────────────┐
+│ Lead fills your form │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ Chat2Sales sends an  │
+│ email notification   │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────┐
+│              Gmail inbox                          │
+│    label: scrapped (added after processing)      │
+└──────────┬───────────────────────────────────────┘
+           │  every hour, GmailApp.search()
+           ▼
+┌──────────────────────────────────────────────────┐
+│              Apps Script: scrapeInbox()           │
+│   • dedupe by Message ID + label                  │
+│   • regex parse: Name, Phone, Email, ...          │
+│   • normalize phone to E.164 (60xxx...)           │
+└──────────┬───────────────────────────────────────┘
+           │  appendRow
+           ▼
+┌──────────────────────────────────────────────────┐
+│         Google Sheet: "Loan Leads CRM"            │
+│   columns: Received At, Message ID, Name, Phone,  │
+│            Email, Interested In, Message,         │
+│            WA Status, WA Sent At, Notes           │
+└──────────┬───────────────────────────────────────┘
+           │  click "Send all pending" in dashboard
+           ▼  (or call sendToUchat per row)
+┌──────────────────────────────────────────────────┐
+│     Apps Script: sendToUchat() / sendAllPending() │
+│   • build JSON from row                           │
+│   • POST to CONFIG.UCHAT_TRIGGER_URL              │
+│   • write back WA Status + Notes                  │
+└──────────┬───────────────────────────────────────┘
+           │  HTTPS POST
+           ▼
+┌──────────────────────────────────────────────────┐
+│          Uchat inbound webhook                    │
+│   • create/find bot user by phone                 │
+│   • save fields to custom fields                  │
+│   • trigger flow                                  │
+└──────────┬───────────────────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────────────────┐
+│       Uchat flow: Demo Lead Welcome               │
+│   • Send WhatsApp Template node                   │
+│   • placeholders filled from custom fields        │
+└──────────┬───────────────────────────────────────┘
+           │
+           ▼
+       📱 WhatsApp delivered to lead
+```
+
+## File walkthrough
+
+### `appsscript.json`
+
+The manifest. Tells Google **what permissions our script needs**:
+
+```json
+{
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/gmail.readonly",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/script.external_request",
+    ...
+  ]
+}
+```
+
+`gmail.readonly` lets us search and read. `gmail.modify` lets us add labels.
+`spreadsheets` lets us write rows. `script.external_request` lets us POST to
+Uchat. Don't add scopes you don't use — Google scolds you for it.
+
+### `Code.gs` — the brain
+
+Top section: **`CONFIG`** — every value you need to customise lives here.
+Search query, country code, Uchat URL, regex for each field. Editing this
+file *should* be 90% of customisation work; you shouldn't need to touch the
+function bodies for normal tweaks.
+
+Then a constant `SHEET_HEADERS` that's auto-built from `CONFIG.FIELDS`.
+
+Then the functions, grouped:
+
+| Function | What it does | When it runs |
+|---|---|---|
+| `doGet()` | Serves the dashboard | When someone opens the web app URL |
+| `setup()` | Creates the sheet, label, and headers | Once, manually |
+| `installHourlyTrigger()` | Sets up auto-scrape | Once, manually |
+| `scrapeInbox()` | Finds and parses new lead emails | Hourly (and manually) |
+| `parseBody_()` | Runs regex on email body | Called by scrapeInbox |
+| `normalizePhone_()` | Cleans phone to E.164 | Called by parseBody |
+| `sendToUchat(messageId)` | POSTs one lead to Uchat | When you click "Send WA" on a row |
+| `sendAllPending()` | Sends every `pending` row | When you click "Send all pending" |
+| `getLeads()` | Returns all rows for the dashboard | Called by Index.html on page load |
+| `exportXlsxUrl()` | Returns the Sheet's xlsx export URL | Called by "Export Excel" button |
+
+The functions ending with `_` (like `parseBody_`) are **private** — Apps
+Script convention says scripts can't call them from outside (e.g. from
+`google.script.run`). Just an organisational marker.
+
+### `Index.html` — the dashboard
+
+Three sections:
+- **CSS** at the top — dark mode styling
+- **HTML** in the middle — header, button bar, table container
+- **JavaScript** at the bottom — calls backend functions and renders rows
+
+The JS is plain (no React, no jQuery). It uses `google.script.run` to call
+backend functions and `withSuccessHandler` to render results. Total: ~80
+lines.
+
+## The mental model in one sentence
+
+> **Apps Script reads Gmail, writes to Sheet, and POSTs to Uchat. Uchat
+> creates a contact and sends WhatsApp. The Sheet is the source of truth.**
+
+If you remember that one sentence, you can reason about anything that goes
+wrong.
+
+---
+
+
+
 
 
