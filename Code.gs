@@ -152,15 +152,15 @@ function sendToUchat(messageId) {
   SHEET_HEADERS.forEach((h, i) => { record[h] = row[i]; });
   if (!record['Phone']) return { ok: false, error: 'Missing phone.' };
 
-  const payload = {
-    user_ns: record['Phone'],
-    phone: record['Phone'],
-    name: record['Name'],
-    email: record['Email'],
-    loan_amount: record['Loan Amount'],
-    purpose: record['Purpose'],
-    received_at: record['Received At'],
-  };
+  const payload = { phone: record['Phone'] };
+  Object.keys(CONFIG.FIELDS).forEach(field => {
+    if (field === 'Phone') return;
+    const key = field.toLowerCase().replace(/\s+/g, '_');
+    payload[key] = record[field];
+  });
+  payload.received_at = record['Received At'] instanceof Date
+    ? record['Received At'].toISOString()
+    : record['Received At'];
   const res = UrlFetchApp.fetch(CONFIG.UCHAT_TRIGGER_URL, {
     method: 'post',
     contentType: 'application/json',
